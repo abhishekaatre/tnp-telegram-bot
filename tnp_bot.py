@@ -311,9 +311,7 @@ def check_once(verbose: bool = False) -> None:
     new = [it for it in items if it["key"] not in seen]
 
     if verbose:
-        print(f"Found {len(items)} items on the page(s). First 15:")
-        for it in items[:15]:
-            print("  -", it["text"][:110], ("→ " + it["link"]) if it["link"] else "")
+        print(f"Found {len(items)} items on the page(s).")  # no job names: logs are public
 
     if first_run:
         send(f"✅ TnP bot is live. Tracking {len(items)} existing items; "
