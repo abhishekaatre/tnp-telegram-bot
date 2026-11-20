@@ -27,6 +27,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           TNP_URL:   https://tp.bitmesra.co.in/index.html,https://tp.bitmesra.co.in/newsevents
           LOGIN_URL: https://tp.bitmesra.co.in/login.html
           TNP_USERNAME:       ${{ secrets.TNP_USERNAME }}
