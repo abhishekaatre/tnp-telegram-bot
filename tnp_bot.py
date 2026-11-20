@@ -77,13 +77,28 @@ def send(text: str, to_channel: bool = True) -> None:
         sys.exit("TELEGRAM_CHAT_ID is not set. Run: python tnp_bot.py --chat-id")
     tg_api("sendMessage", chat_id=chat_id, text=text[:4000],
            disable_web_page_preview="true")
+    if to_channel:
+        send_channel(text)
+
+
+def send_channel(text: str) -> None:
+    """Post to the friends' group/channel. Problems here never stop your own alerts."""
     channel = env("TELEGRAM_CHANNEL_ID")
-    if to_channel and channel:
-        try:  # friends' channel; a problem here must not stop your own alerts
-            tg_api("sendMessage", chat_id=channel, text=text[:4000],
+    if not channel:
+        return
+    try:
+        tg_api("sendMessage", chat_id=channel, text=text[:4000],
+               disable_web_page_preview="true")
+    except Exception as e:
+        m = re.search(r"'migrate_to_chat_id': (-?\d+)", str(e))
+        try:
+            if not m:
+                raise
+            # the group was upgraded by Telegram and got a new ID: follow it
+            tg_api("sendMessage", chat_id=m.group(1), text=text[:4000],
                    disable_web_page_preview="true")
-        except Exception as e:
-            print("channel send failed:", e)
+        except Exception as e2:
+            print("channel send failed:", e2)
 
 
 def print_chat_id() -> None:
@@ -351,10 +366,13 @@ def main() -> None:
     p.add_argument("--once", action="store_true", help="check once and exit")
     p.add_argument("--chat-id", action="store_true", help="print your Telegram chat ID")
     p.add_argument("--test", action="store_true", help="send a test message and list items")
+    p.add_argument("--hello", action="store_true", help="post a hello message to the group/channel")
     a = p.parse_args()
 
     if a.chat_id:
         print_chat_id()
+    elif a.hello:
+        send_channel("👋 Hello! This group will now get new TnP portal jobs and updates automatically.")
     elif a.test:
         send("👋 Test message from your TnP bot. It works!")
         s = make_session()
