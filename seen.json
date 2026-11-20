@@ -1197,5 +1197,5 @@
   "news:8d2eefd16f3a2641",
   "news:b9fd2d661316d94e"
  ],
- "last_error": ""
+ "last_error": "ConnectTimeout: HTTPSConnectionPool(host='tp.bitmesra.co.in', port=443): Max retries exceeded with url: /login.html (Caused by ConnectTimeoutError(<HTTPSConnection(host='tp.bitmesra.co.in', port=443) at 0x741f7c607530>, 'Connection to tp.bitmesra.co.in timed out. (connect timeout=30)'))"
 }
