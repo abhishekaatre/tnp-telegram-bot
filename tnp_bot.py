@@ -71,12 +71,19 @@ def tg_api(method: str, **params):
     return data["result"]
 
 
-def send(text: str) -> None:
+def send(text: str, to_channel: bool = True) -> None:
     chat_id = env("TELEGRAM_CHAT_ID")
     if not chat_id:
         sys.exit("TELEGRAM_CHAT_ID is not set. Run: python tnp_bot.py --chat-id")
     tg_api("sendMessage", chat_id=chat_id, text=text[:4000],
            disable_web_page_preview="true")
+    channel = env("TELEGRAM_CHANNEL_ID")
+    if to_channel and channel:
+        try:  # friends' channel; a problem here must not stop your own alerts
+            tg_api("sendMessage", chat_id=channel, text=text[:4000],
+                   disable_web_page_preview="true")
+        except Exception as e:
+            print("channel send failed:", e)
 
 
 def print_chat_id() -> None:
@@ -299,7 +306,7 @@ def check_once(verbose: bool = False) -> None:
         print(f"[{datetime.now():%H:%M}] ERROR {msg}")
         if msg != state.get("last_error"):  # alert once per new kind of error
             try:
-                send(f"⚠️ TnP bot problem:\n{msg[:500]}")
+                send(f"⚠️ TnP bot problem:\n{msg[:500]}", to_channel=False)
             except Exception:
                 pass
             state["last_error"] = msg
