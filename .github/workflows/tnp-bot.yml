@@ -2,7 +2,7 @@ name: TnP Telegram bot
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 min (GitHub may delay runs a few minutes)
+    - cron: "*/5 * * * *"    # every 5 min = GitHub minimum (runs may be delayed a few minutes)
   workflow_dispatch:          # lets you press "Run workflow" manually
 
 permissions:
