@@ -340,7 +340,10 @@ def git_save() -> None:
     """Commit seen.json right away (used when running on GitHub Actions)."""
     import subprocess
     cmd = ('git add seen.json && (git diff --cached --quiet || '
-           '(git commit -q -m "update seen notices" && git push -q))')
+           '(git -c user.name=tnp-bot -c user.email=tnp-bot@users.noreply.github.com '
+           'commit -q -m "update seen notices" && '
+           '(git push -q || (git -c user.name=tnp-bot -c user.email=tnp-bot@users.noreply.github.com '
+           'pull -q --rebase && git push -q))))')
     subprocess.run(cmd, shell=True, cwd=HERE, check=False)
 
 
