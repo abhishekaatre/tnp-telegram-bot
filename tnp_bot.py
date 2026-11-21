@@ -118,6 +118,10 @@ def print_chat_id() -> None:
 
 
 # ----------------------------------------------------------------- fetch ----
+class LoginFailed(RuntimeError):
+    """Wrong ID/password (not a temporary portal problem)."""
+
+
 def make_session() -> requests.Session:
     s = requests.Session()
     s.headers["User-Agent"] = UA
@@ -143,7 +147,8 @@ def login(s: requests.Session) -> None:
     pw_input = soup.find("input", {"type": "password"})
     form = pw_input.find_parent("form") if pw_input else soup.find("form")
     if not form:
-        raise RuntimeError("Couldn't find a login form on LOGIN_URL.")
+        title = clean(soup.title.get_text()) if soup.title else "no title"
+        raise RuntimeError(f"Couldn't find a login form on LOGIN_URL (page: {title[:80]}).")
 
     payload = {}
     for inp in form.find_all(["input", "select", "textarea"]):
@@ -186,8 +191,8 @@ def login(s: requests.Session) -> None:
 
     after = BeautifulSoup(resp.text, "html.parser")
     if after.find("input", {"type": "password"}) and "logout" not in resp.text.lower():
-        raise RuntimeError("Login seems to have failed (still seeing a password box). "
-                           "Check username/password, or the site may use a captcha.")
+        raise LoginFailed("Login seems to have failed (still seeing a password box). "
+                          "Check username/password, or the site may use a captcha.")
 
 
 def fetch_pages(s: requests.Session) -> list[tuple[str, str]]:
@@ -299,7 +304,7 @@ def load_state() -> dict:
             return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
-    return {"seen": [], "last_error": ""}
+    return {"seen": [], "down_since": None, "alerted": False}
 
 
 def save_state(state: dict) -> None:
@@ -307,28 +312,112 @@ def save_state(state: dict) -> None:
 
 
 # ------------------------------------------------------------------ main ----
-def check_once(verbose: bool = False) -> None:
+_SESSION = None
+
+
+def get_items() -> list[dict]:
+    """Fetch all items, reusing one logged-in session; re-login if it expired."""
+    global _SESSION
+    for attempt in range(2):
+        if _SESSION is None:
+            _SESSION = make_session()
+            login(_SESSION)
+        pages = fetch_pages(_SESSION)
+        expired = env("LOGIN_URL") and any(
+            BeautifulSoup(html, "html.parser").find("input", {"type": "password"})
+            for _, html in pages)
+        if expired and attempt == 0:
+            _SESSION = None  # session timed out -> log in again
+            continue
+        items = []
+        for url, html in pages:
+            items.extend(extract_items(url, html))
+        return items
+    raise RuntimeError("Still on the login page after logging in again.")
+
+
+def git_save() -> None:
+    """Commit seen.json right away (used when running on GitHub Actions)."""
+    import subprocess
+    cmd = ('git add seen.json && (git diff --cached --quiet || '
+           '(git commit -q -m "update seen notices" && git push -q))')
+    subprocess.run(cmd, shell=True, cwd=HERE, check=False)
+
+
+def friendly(e: Exception) -> str:
+    t = f"{type(e).__name__}: {e}"
+    if isinstance(e, LoginFailed):
+        return ("I couldn't log in to the TnP portal. Your password may have changed. "
+                "Update TNP_PASSWORD in GitHub → Settings → Secrets and variables → Actions.")
+    if "NameResolution" in t or "resolve" in t:
+        return "The TnP portal's address couldn't be found (the college site seems to be down)."
+    if "Timeout" in t or "timed out" in t:
+        return "The TnP portal isn't responding (it seems to be down or very slow)."
+    if "ConnectionError" in t or "Connection refused" in t or "ConnectionReset" in t:
+        return "I can't connect to the TnP portal (the college site seems to be down)."
+    if "Timeout" in t or "timed out" in t:
+        return "The TnP portal isn't responding (it seems to be down or very slow)."
+    if "login form" in t:
+        return "The TnP portal showed an unusual page instead of the login page (maybe maintenance)."
+    if "Telegram" in t:
+        return f"Problem sending a Telegram message: {t[:200]}"
+    return f"Unexpected problem: {t[:300]}"
+
+
+def handle_failure(state: dict, err: Exception) -> None:
+    """Only alert when a problem lasts; one alert per outage."""
+    now = time.time()
+    if not state.get("down_since"):
+        state["down_since"] = now
+    down_min = (now - state["down_since"]) / 60
+    wait_min = float(env("ALERT_AFTER_MIN", "45"))
+    print(f"[{datetime.now():%H:%M}] check failed ({down_min:.0f} min so far): {friendly(err)}")
+    if not state.get("alerted") and (isinstance(err, LoginFailed) or down_min >= wait_min):
+        extra = "" if isinstance(err, LoginFailed) else (
+            f"\n\nIt has been failing for about {max(1, round(down_min))} min. "
+            "I'll keep trying and tell you when it works again.")
+        try:
+            send(f"⚠️ TnP bot problem\n\n{friendly(err)}{extra}", to_channel=False)
+            state["alerted"] = True
+        except Exception as e:
+            print("could not send alert:", e)
+    save_state(state)
+
+
+def check_once(verbose: bool = False) -> bool:
+    """Returns True if something new was found (state changed)."""
+    global _SESSION
     state = load_state()
     first_run = not state["seen"]
-    try:
-        s = make_session()
-        login(s)
-        items = []
-        for url, html in fetch_pages(s):
-            items.extend(extract_items(url, html))
-    except Exception as e:
-        msg = f"{type(e).__name__}: {e}"
-        print(f"[{datetime.now():%H:%M}] ERROR {msg}")
-        if msg != state.get("last_error"):  # alert once per new kind of error
-            try:
-                send(f"⚠️ TnP bot problem:\n{msg[:500]}", to_channel=False)
-            except Exception:
-                pass
-            state["last_error"] = msg
-            save_state(state)
-        raise SystemExit(1)
+    items, err = None, None
+    tries = int(env("FETCH_TRIES", "3"))
+    for attempt in range(tries):
+        try:
+            items = get_items()
+            break
+        except LoginFailed as e:  # wrong password: retrying won't help
+            _SESSION, err = None, e
+            break
+        except Exception as e:    # portal slow/down: wait a bit and try again
+            _SESSION, err = None, e
+            print(f"[{datetime.now():%H:%M}] try {attempt + 1}/{tries} failed: "
+                  f"{type(e).__name__}: {str(e)[:200]}")
+            if attempt + 1 < tries:
+                time.sleep(float(env("RETRY_WAIT_SEC", "15")))
 
-    state["last_error"] = ""
+    if items is None:
+        handle_failure(state, err)
+        return False
+
+    if state.get("alerted"):
+        try:
+            send("✅ TnP bot is back to normal. The portal is reachable again "
+                 "and I'm checking for new jobs.", to_channel=False)
+        except Exception:
+            pass
+    state.pop("last_error", None)
+    state["down_since"] = None
+    state["alerted"] = False
     seen = set(state["seen"])
     new = [it for it in items if it["key"] not in seen]
 
@@ -356,8 +445,31 @@ def check_once(verbose: bool = False) -> None:
     older = [k for k in state["seen"] if k not in cur_set][-2000:]
     state["seen"] = older + current
     save_state(state)
-    print(f"[{datetime.now():%Y-%m-%d %H:%M}] checked: {len(items)} items, {len(new)} new"
-          + (" (first run, baseline saved)" if first_run else ""))
+    if verbose or new:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] checked: {len(items)} items, {len(new)} new"
+              + (" (first run, baseline saved)" if first_run else ""))
+    return bool(new)
+
+
+def run_loop(minutes: float, interval_sec: float, commit: bool) -> None:
+    """Check every `interval_sec` seconds for `minutes` minutes (0 = forever)."""
+    end = time.time() + minutes * 60 if minutes else float("inf")
+    n = 0
+    print(f"Checking every {interval_sec:g}s" + (f" for {minutes:g} min" if minutes else ""))
+    while time.time() < end:
+        start = time.time()
+        try:
+            changed = check_once()
+            if changed and commit:
+                git_save()
+        except SystemExit:
+            pass
+        except Exception as e:  # never let the loop die
+            print("unexpected:", e)
+        n += 1
+        if n % 120 == 0:
+            print(f"[{datetime.now():%H:%M}] still running, {n} checks done")
+        time.sleep(max(1.0, interval_sec - (time.time() - start)))
 
 
 def main() -> None:
@@ -367,7 +479,10 @@ def main() -> None:
     p.add_argument("--chat-id", action="store_true", help="print your Telegram chat ID")
     p.add_argument("--test", action="store_true", help="send a test message and list items")
     p.add_argument("--hello", action="store_true", help="post a hello message to the group/channel")
+    p.add_argument("--loop-minutes", type=float, default=None,
+                   help="keep checking for this many minutes, then exit (GitHub Actions)")
     a = p.parse_args()
+    interval_sec = float(env("CHECK_INTERVAL_SEC", "30"))
 
     if a.chat_id:
         print_chat_id()
@@ -384,15 +499,11 @@ def main() -> None:
                 print("  -", it["text"][:110], ("→ " + it["link"]) if it["link"] else "")
     elif a.once:
         check_once(verbose=True)
+    elif a.loop_minutes is not None:
+        run_loop(a.loop_minutes, interval_sec, commit=env_bool("GIT_COMMIT", False))
     else:
-        interval = float(env("CHECK_INTERVAL_MIN", "15"))
-        print(f"Running. Checking every {interval:g} min. Press Ctrl+C to stop.")
-        while True:
-            try:
-                check_once()
-            except SystemExit:
-                pass
-            time.sleep(interval * 60)
+        print("Running. Press Ctrl+C to stop.")
+        run_loop(0, interval_sec, commit=False)
 
 
 if __name__ == "__main__":
