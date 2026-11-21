@@ -1197,5 +1197,5 @@
   "news:8d2eefd16f3a2641",
   "news:b9fd2d661316d94e"
  ],
- "last_error": "RuntimeError: Couldn't find a login form on LOGIN_URL."
+ "last_error": ""
 }
