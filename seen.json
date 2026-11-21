@@ -1197,5 +1197,6 @@
   "news:8d2eefd16f3a2641",
   "news:b9fd2d661316d94e"
  ],
- "last_error": ""
+ "down_since": null,
+ "alerted": false
 }
