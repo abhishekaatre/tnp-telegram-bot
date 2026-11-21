@@ -2,7 +2,7 @@ name: TnP Telegram bot
 
 on:
   schedule:
-    - cron: "*/5 * * * *"    # every 5 min = GitHub minimum (runs may be delayed a few minutes)
+    - cron: "*/5 * * * *"    # GitHub starts a run about hourly; each run stays awake (see below)
   workflow_dispatch:          # lets you press "Run workflow" manually
     inputs:
       hello:
@@ -20,7 +20,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,11 +41,14 @@ jobs:
           PASSWORD_FIELD:     ${{ secrets.PASSWORD_FIELD }}
           ITEM_SELECTOR:      ${{ secrets.ITEM_SELECTOR }}
           VERIFY_SSL:         ${{ secrets.VERIFY_SSL }}
-        run: python tnp_bot.py ${{ inputs.hello && '--hello' || '--once' }}
+          CHECK_INTERVAL_SEC: 60     # check the portal every 1 minute
+          GIT_COMMIT: 1
+        # always-on: keep checking for ~5h40m; the next queued run takes over after
+        run: python tnp_bot.py ${{ inputs.hello && '--hello' || '--loop-minutes 340' }}
       - name: Save what has been seen
         if: always()
         run: |
           git config user.name  "tnp-bot"
           git config user.email "tnp-bot@users.noreply.github.com"
           git add seen.json || true
-          git diff --cached --quiet || (git commit -m "update seen notices" && git push)
+          git diff --cached --quiet || (git commit -m "update seen notices" && (git push || (git pull --rebase && git push)))
