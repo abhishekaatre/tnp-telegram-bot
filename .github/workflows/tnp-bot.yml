@@ -43,6 +43,7 @@ jobs:
           VERIFY_SSL:         ${{ secrets.VERIFY_SSL }}
           CHECK_INTERVAL_SEC: 60     # check the portal every 1 minute
           GIT_COMMIT: 1
+          PYTHONUNBUFFERED: 1        # show log lines live
         # always-on: keep checking for ~5h40m; the next queued run takes over after
         run: python tnp_bot.py ${{ inputs.hello && '--hello' || '--loop-minutes 340' }}
       - name: Save what has been seen
